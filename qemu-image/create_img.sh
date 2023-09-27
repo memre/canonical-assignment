@@ -30,20 +30,27 @@
 # The script should run within the working directory and not consume any other
 # locations on the host file system.
 
-clean_env=false
-kernel_version=$(uname -r)
-work_folder=$(realpath -m "./work")
-downloads_folder=$(realpath -m "${work_folder}/downloads")
+CLEAN_ENV=false
+KERNEL_VERSION=$(uname -r)
+WORK_FOLDER=$(realpath -m "./work")
+DOWNLOADS_FOLDER=$(realpath -m "${WORK_FOLDER}/downloads")
+STAMPS_FOLDER=$(realpath -m "${WORK_FOLDER}/stamps")
 
-kernel_folder=$(realpath -m "${work_folder}/linux")
-busybox_folder=$(realpath -m "${work_folder}/busybox")
-stamps_folder=$(realpath -m "${work_folder}/stamps")
+INITRAMFS_FOLDER=$(realpath -m "${WORK_FOLDER}/initramfs")
+
+TMP_FOLDER=$(realpath -m "${WORK_FOLDER}/tmp")
+ROOTFS_FOLDER=$(realpath -m "${WORK_FOLDER}/rootfs")
+
+ROOTFS_IMG="${WORK_FOLDER}/hdd.img"
+INITRAMFS_IMG="${WORK_FOLDER}/initrd.img"
+ROOTFS_SIZE="200M"
 
 usage() {
   echo "This script creates a simple rootfs by using Ubuntu repositories"
+  echo "Author: Mehmet Emre Atasever"
   echo "Usage: $0 [options]"
   echo "Options:"
-  echo "  --clean-env                Clean up all before creating qemu image"
+  echo "  --clean-env                Clean up all before creating qemu image (optional)"
   echo "  --kernel-version <version> Specify the kernel version to download (optional)"
 
   exit 1
@@ -55,38 +62,37 @@ die() {
 }
 
 cleanup() {
-  if [ -d "${work_folder}" ]; then
-    mv "${work_folder}"{,_$(date +%Y.%m.%d_%H.%M.%S)}
+  if [ -d "${WORK_FOLDER}" ]; then
+    mv "${WORK_FOLDER}"{,_$(date +%Y.%m.%d_%H.%M.%S)}
   fi
 }
 
+create_folders() {
+  mkdir -p "${WORK_FOLDER}"
+  mkdir -p "${DOWNLOADS_FOLDER}"
+  mkdir -p "${TMP_FOLDER}"
+  mkdir -p "${STAMPS_FOLDER}"
+}
+
 mark_done() {
-  touch "${stamps_folder}/$1"
+  touch "${STAMPS_FOLDER}/$1"
 }
 
 check_stamp() {
-  [ -e "${stamps_folder}/$1" ] || return 1
+  [ -e "${STAMPS_FOLDER}/$1" ] || return 1
   return 0
 }
 
-create_folders() {
-  mkdir -p "${work_folder}"
-  mkdir -p "${downloads_folder}"
-  mkdir -p "${kernel_folder}"
-  mkdir -p "${busybox_folder}"
-  mkdir -p "${stamps_folder}"
-}
-
 download_packages() {
-  echo "Downloading required packages..."
-  stamp_file="download-packages"
+  local stamp_file="download-packages"
+
   check_stamp $stamp_file || (
-    set -e
-    pushd "$downloads_folder" > /dev/null
+    echo "Downloading required packages..."
+    pushd "$DOWNLOADS_FOLDER" > /dev/null
     apt-get download \
-      linux-image-$kernel_version \
-      linux-modules-$kernel_version \
-      busybox-initramfs
+      linux-image-$KERNEL_VERSION \
+      linux-modules-$KERNEL_VERSION \
+      busybox-static
     [ $? -eq 0 ] || return 1
     popd > /dev/null
   ) || die "downloading packages"
@@ -94,15 +100,16 @@ download_packages() {
 }
 
 extract_package() {
-  name=$1
-  package_name=$2
-  package_work_folder=$3
+  local name=$1
+  local package_name=$2
+  local package_work_folder=$3
 
-  stamp_file="extract-${1}"
+  local stamp_file="extract-${1}"
+
   check_stamp $stamp_file || (
     echo "Extracting ${name}"
 
-    deb_package=$(find $downloads_folder -name $package_name)
+    deb_package=$(find $DOWNLOADS_FOLDER -name $package_name)
     dpkg -x "$deb_package" "$package_work_folder/"
     [ $? -eq 0 ] || return 1
 
@@ -111,17 +118,13 @@ extract_package() {
   ) || die "Extracting $1"
 }
 
-INITRAMFS_FOLDER=$(realpath -m "${work_folder}/initramfs")
-TMP_FOLDER=$(realpath -m "${work_folder}/tmp")
-INITRAMFS_IMG="${work_folder}/initrd.img"
-
 create_initramfs() {
   local stamp_file="create-initramfs"
 
   check_stamp $stamp_file || (
     mkdir -p $INITRAMFS_FOLDER{{,/usr}/bin,{,/usr}/sbin}
 
-    local busybox_path="${work_folder}/assets/busybox"
+    local busybox_path=$(find "$TMP_FOLDER" -name 'busybox' | head -n 1)
     install -m 755 $busybox_path $INITRAMFS_FOLDER/bin
 
     touch $INITRAMFS_FOLDER/init
@@ -130,9 +133,20 @@ create_initramfs() {
     cat << '__EOF' > $INITRAMFS_FOLDER/init
 #!/bin/sh
 
-echo "initramfs test"
+echo "Starting initramfs based on Ubuntu 22.04"
 
-mkdir /dev /sys /proc /tmp /run
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export ROOT_DEVICE=/dev/sda1
+export INIT=/sbin/init
+export rootmnt=/root
+
+[ -d $rootmnt ] || mkdir -m 0700 $rootmnt
+
+[ -d /dev ] || mkdir -m 0755 /dev
+[ -d /sys ] || mkdir /sys
+[ -d /proc ] || mkdir /proc
+[ -d /tmp ] || mkdir /tmp
+[ -d /run ] || mkdir /run
 
 mount -t sysfs -o nodev,noexec,nosuid sysfs /sys
 mount -t proc -o nodev,noexec,nosuid proc /proc
@@ -140,9 +154,17 @@ mount -t proc -o nodev,noexec,nosuid proc /proc
 mount -t devtmpfs -o nosuid,mode=0755 udev /dev
 mkdir /dev/pts
 mount -t devpts -o noexec,nosuid,gid=5,mode=0620 devpts /dev/pts || true
+
 mount -t tmpfs -o "nodev,noexec,nosuid,size=${RUNSIZE:-10%},mode=0755" tmpfs /run
 
-/bin/sh
+mount $ROOT_DEVICE $rootmnt
+
+mount -n -o move /run $rootmnt/run
+mount -n -o move /sys $rootmnt/sys
+mount -n -o move /proc $rootmnt/proc
+mount -n -o move /dev $rootmnt/dev
+
+exec /sbin/switch_root -c /dev/console $rootmnt $INIT $LEVEL
 __EOF
 
     sudo chroot $INITRAMFS_FOLDER /bin/busybox --install -s
@@ -154,15 +176,81 @@ __EOF
   ) || die "Creating initramfs"
 }
 
+create_rootfs() {
+  local stamp_file="create-rootfs"
+
+  check_stamp $stamp_file || (
+    local loop_device=$(sudo losetup -f)
+    local busybox_path=$(find "$TMP_FOLDER" -name 'busybox' | head -n 1)
+    local grub_cfg_file="$ROOTFS_FOLDER/boot/grub/grub.cfg"
+
+    # Create a raw image
+    dd if=/dev/zero of="$ROOTFS_IMG" bs=1 count=0 seek="$ROOTFS_SIZE"
+
+    # Mount the partition to a loopback device
+    sudo losetup "$loop_device" "$ROOTFS_IMG"
+
+    # Use parted to create a partition
+    sudo parted -s "$loop_device" mklabel msdos
+    sudo parted -s "$loop_device" mkpart primary ext4 1MiB 100%
+
+    sudo mkfs.ext4 "$loop_device"p1
+
+    sudo mkdir -p $ROOTFS_FOLDER
+    sudo mount "$loop_device"p1 "$ROOTFS_FOLDER"
+
+    sudo mkdir -p $ROOTFS_FOLDER{{,/usr}/bin,{,/usr}/sbin,/boot/grub,/dev,/proc,/sys,/tmp,/run,/etc/init.d}
+
+    sudo cp -rf $TMP_FOLDER/* $ROOTFS_FOLDER
+    sudo cp -f $INITRAMFS_IMG $ROOTFS_FOLDER/boot
+
+    sudo chroot $ROOTFS_FOLDER /bin/busybox --install -s
+
+    cat << '__EOF' | sudo tee $ROOTFS_FOLDER/etc/inittab
+::sysinit:/etc/init.d/rcS
+__EOF
+
+    cat << '__EOF' | sudo tee $ROOTFS_FOLDER/etc/init.d/rcS
+#!/bin/sh
+
+echo "Hello world"
+__EOF
+
+    sudo chmod +x $ROOTFS_FOLDER/etc/init.d/rcS
+
+    # Install GRUB
+    sudo grub-install --target=i386-pc --root-directory="$ROOTFS_FOLDER" "$loop_device"
+
+    local kernel_image_path=$(find "$ROOTFS_FOLDER"/boot -name 'vmlinuz*' | head -n 1)
+    local initrd_image_path=$(find "$ROOTFS_FOLDER"/boot -name 'initrd*' | head -n 1)
+    # Generate GRUB configuration
+
+    cat << __EOF | sudo tee $grub_cfg_file
+set timeout=5
+set default=0
+
+menuentry "Hello World Linux" {
+    linux /boot/$(basename $kernel_image_path) root=/dev/sda1 quiet
+    initrd /boot/$(basename $initrd_image_path)
+}
+__EOF
+
+    # Unmount the loopback device
+    sudo umount "$ROOTFS_FOLDER"
+    sudo losetup -d "$loop_device"
+    mark_done $stamp_file
+  ) || die "Creating rootfs"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --kernel-version)
       shift
-      kernel_version=$1
+      KERNEL_VERSION=$1
       shift
       ;;
     --clean-env)
-      clean_env=true
+      CLEAN_ENV=true
       shift
       ;;
     *)
@@ -172,7 +260,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Clean up if requested
-if [ "${clean_env}" = true ]; then
+if [ "${CLEAN_ENV}" = true ]; then
   cleanup
 fi
 
@@ -183,14 +271,21 @@ create_folders
 download_packages
 
 # extract packages
-extract_package "kernel" "linux-image-${kernel_version}*.deb" "${kernel_folder}"
-extract_package "modules" "linux-modules-${kernel_version}*.deb" "${kernel_folder}"
+extract_package "kernel" "linux-image-${KERNEL_VERSION}*.deb" "${TMP_FOLDER}"
+extract_package "modules" "linux-modules-${KERNEL_VERSION}*.deb" "${TMP_FOLDER}"
+extract_package "busybox" "busybox-static*.deb" "${TMP_FOLDER}"
 
+# cleanup redundant files for this image
+[ -d $TMP_FOLDER/usr ] && {
+  echo "Removing redundant files"
+  rm -rf $TMP_FOLDER/usr
+}
+
+# minimal initial ramdisk creation
 create_initramfs
 
-# qemu-system-x86_64 -hda bla.img \
-#   -initrd initramfs.cpio.gz \
-#   -kernel ../work_2023.09.26_20.15.42/linux/boot/vmlinuz-6.2.0-33-generic
+# minimal rootfs creation
+create_rootfs
 
-qemu-system-x86_64 -initrd $INITRAMFS_IMG \
-  -kernel ./work/linux/boot/vmlinuz-6.2.0-33-generic
+# run the image
+qemu-system-x86_64 -m 256 -hda $ROOTFS_IMG
