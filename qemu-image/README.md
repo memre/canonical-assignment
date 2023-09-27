@@ -15,6 +15,12 @@ the build script will also be located.
 
 Tested on `Ubuntu 22.04.3 LTS x86_64`, kernel version `6.2.0-33-generic`.
 
+- coreutils:
+  - realpath
+  - date
+- apt:
+  - apt
+
 Use ubuntu kernel directly from the ubuntu repositories.
 TODO
 
