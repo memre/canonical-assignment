@@ -18,11 +18,27 @@ func TestShredFileNotFound(t *testing.T) {
 	os.Remove(tmpFile.Name())
 
 	// Call Shred with a non-existent filename
-	err = Shred(tmpFile.Name())
+	progressChDummy := make(chan int)
+	errCh := make(chan error)
+	go func() {
+		err := Shred(tmpFile.Name(), progressChDummy)
+		errCh <- err
+		close(progressChDummy)
+	}()
 
-	// Check if the error is not nil (file not found)
-	if err == nil {
-		t.Errorf("Expected error, but got nil for file %s", tmpFile.Name())
+	for {
+		select {
+		case _, ok := <-progressChDummy:
+			if !ok {
+				return
+			}
+
+		case err := <-errCh:
+			if err == nil {
+				t.Errorf("Expected error, but got nil for file %s", tmpFile.Name())
+				return
+			}
+		}
 	}
 }
 
@@ -38,11 +54,27 @@ func TestShredFileFound(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	// Call Shred with the existing filename
-	err = Shred(tmpFile.Name())
+	progressChDummy := make(chan int)
+	errCh := make(chan error)
+	go func() {
+		err := Shred(tmpFile.Name(), progressChDummy)
+		errCh <- err
+		close(progressChDummy)
+	}()
 
-	// Check if the error is nil (file found)
-	if err != nil {
-		t.Errorf("Expected no error, but got %v for file %s", err, tmpFile.Name())
+	for {
+		select {
+		case _, ok := <-progressChDummy:
+			if !ok {
+				return
+			}
+
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("Expected error, but got nil for file %s", tmpFile.Name())
+				return
+			}
+		}
 	}
 }
 
@@ -59,12 +91,30 @@ func TestShredRemovesTheFile(t *testing.T) {
 	tmpFile.Close()
 
 	// Call Shred with the existing filename
-	err = Shred(filename)
+	progressChDummy := make(chan int)
+	errCh := make(chan error)
+	go func() {
+		err := Shred(filename, progressChDummy)
+		errCh <- err
+		close(progressChDummy)
+	}()
 
-	// Check if the error is nil (file found)
-	if err != nil {
-		t.Errorf("Expected no error, but got %v for file %s", err, tmpFile.Name())
+L:
+	for {
+		select {
+		case _, ok := <-progressChDummy:
+			if !ok {
+				return
+			}
+
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("Expected error, but got nil for file %s", tmpFile.Name())
+				break L
+			}
+		}
 	}
+
 	_, err = os.Stat(filename)
 	if err == nil {
 		t.Errorf("Expected file %s was removed: %v", filename, err)

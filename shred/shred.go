@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 )
@@ -12,30 +11,25 @@ const (
 	shredCount = 3
 )
 
-func Shred(filename string) error {
+func Shred(filename string, progressCh chan int) error {
 	// Check if the file exists
 	fileInfo, err := os.Stat(filename)
 	if err != nil {
-		fmt.Printf("File %s not found\n", filename)
 		return err
 	}
 
 	fileSize := fileInfo.Size()
 
-	fmt.Printf("File %s found (%d bytes)\n", filename, fileSize)
-
 	for i := 1; i <= shredCount; i++ {
 		if err := DoShred(filename, fileSize); err != nil {
 			return err
 		}
+		progressCh <- i * 100 / shredCount
 	}
 
 	// Remove the file after shredding
-	if err := os.Remove(filename); err != nil {
-		return err
-	}
-
-	return nil
+	return os.Remove(filename)
+	//return nil
 }
 
 // DoShred is a function that shreds a file with random data.

@@ -14,8 +14,29 @@ func main() {
 	// Get the filename from command-line argument
 	filename := os.Args[1]
 
-	if err := Shred(filename); err != nil {
-		fmt.Printf("Error while shredding file: %v\n", err)
-		os.Exit(1)
+	// Create a channel for progress updates
+	progressCh := make(chan int)
+	errCh := make(chan error)
+
+	go func() {
+		err := Shred(filename, progressCh)
+		errCh <- err
+		close(progressCh)
+	}()
+
+	for {
+		select {
+		case progress, ok := <-progressCh:
+			if !ok {
+				fmt.Println("")
+				return
+			}
+			fmt.Printf("Shredding %s (%d%%)\r", filename, progress)
+		case err := <-errCh:
+			if err != nil {
+				fmt.Printf("\nError: %v\n", err)
+				return
+			}
+		}
 	}
 }
