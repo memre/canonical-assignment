@@ -46,6 +46,31 @@ func TestShredFileFound(t *testing.T) {
 	}
 }
 
+// given a filename that was created before
+// then expected Shred returns success
+func TestShredRemovesTheFile(t *testing.T) {
+	// Create a temporary test file and get its name
+	tmpFile, err := os.CreateTemp("", "shred_example_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := tmpFile.Name()
+	// Remove the temporary file when test finished
+	tmpFile.Close()
+
+	// Call Shred with the existing filename
+	err = Shred(filename)
+
+	// Check if the error is nil (file found)
+	if err != nil {
+		t.Errorf("Expected no error, but got %v for file %s", err, tmpFile.Name())
+	}
+	_, err = os.Stat(filename)
+	if err == nil {
+		t.Errorf("Expected file %s was removed: %v", filename, err)
+	}
+}
+
 // given a filename that was not exists
 // then expected DoShred cannot shred the file
 func TestDoShredFileNotExists(t *testing.T) {

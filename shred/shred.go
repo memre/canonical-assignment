@@ -29,6 +29,12 @@ func Shred(filename string) error {
 			return err
 		}
 	}
+
+	// Remove the file after shredding
+	if err := os.Remove(filename); err != nil {
+		return err
+	}
+
 	return nil
 }
 
